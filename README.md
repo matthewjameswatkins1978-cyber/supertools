@@ -81,7 +81,7 @@ Every command accepts `--json` and emits one canonical envelope on stdout
 {
   "schema_version": 1,
   "tool": "supertools",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "operation": "repo.state",
   "ok": true,
   "status": "ok",

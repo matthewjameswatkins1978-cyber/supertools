@@ -694,18 +694,40 @@ fn github_context(operation: &str) -> Result<(String, String), Failure> {
     Ok((gh, format!("{}/{}", gh_repo.0, gh_repo.1)))
 }
 
-pub fn pr() -> CmdResult {
-    let operation = "repo.pr";
-    let (gh, repo) = github_context(operation)?;
-    let fields = "number,title,state,isDraft,url,author,baseRefName,headRefName,mergeable,reviewDecision,statusCheckRollup";
-    let args = vec![
+const PR_FIELDS: &str = "number,title,state,isDraft,url,author,baseRefName,headRefName,mergeable,reviewDecision,statusCheckRollup";
+
+/// `gh pr view` requires a positional `<number> | <url> | <branch>` selector
+/// whenever `--repo` is passed explicitly (gh: "argument required when using
+/// the --repo flag"). The current branch is the selector; the repository
+/// identity comes from the existing parsed-remote authority.
+fn pr_view_args(branch: &str, repo: &str) -> Vec<String> {
+    vec![
         "pr".to_string(),
         "view".to_string(),
+        branch.to_string(),
         "--repo".to_string(),
-        repo.clone(),
+        repo.to_string(),
         "--json".to_string(),
-        fields.to_string(),
-    ];
+        PR_FIELDS.to_string(),
+    ]
+}
+
+pub fn pr() -> CmdResult {
+    let operation = "repo.pr";
+    // Branch truth comes from the same porcelain v2 status authority as
+    // repo.state — never a second parser. Checked before any gh probing so a
+    // detached HEAD is answered locally, without tools or network.
+    let (st, status_ev) = run_status(operation)?;
+    let Some(branch) = st.head.clone().filter(|_| !st.detached()) else {
+        return Ok(Builder::no_results(
+            operation,
+            "no current branch to select a PR for (detached HEAD)",
+        )
+        .evidence(status_ev)
+        .line("detached HEAD: gh pr view needs <number> | <url> | <branch> — Supertools will not guess one"));
+    };
+    let (gh, repo) = github_context(operation)?;
+    let args = pr_view_args(&branch, &repo);
     let outcome = process::run(
         &Request::new(gh.clone(), args.clone())
             .timeout(GH_TIMEOUT)
@@ -724,6 +746,7 @@ pub fn pr() -> CmdResult {
         if msg.contains("no pull requests found") || msg.contains("could not find") {
             return Ok(
                 Builder::no_results(operation, "no PR for the current branch")
+                    .evidence(status_ev)
                     .evidence(ev)
                     .line("no open PR found for the current branch"),
             );
@@ -744,6 +767,7 @@ pub fn pr() -> CmdResult {
     let number = parsed.get("number").and_then(|t| t.as_u64()).unwrap_or(0);
     let b = Builder::ok(operation, format!("PR #{number} \"{title}\" — {state}"))
         .data(parsed.clone())
+        .evidence(status_ev)
         .evidence(ev)
         .line(format!("#{number} {title}"))
         .line(format!(
@@ -903,5 +927,34 @@ mod tests {
             Some(("o".into(), "r".into()))
         );
         assert_eq!(parse_github_remote("https://gitlab.com/o/r.git"), None);
+        // Malformed / unsupported identities never produce a repo value.
+        assert_eq!(parse_github_remote("https://github.com/o/"), None);
+        assert_eq!(parse_github_remote("https://github.com//r"), None);
+        assert_eq!(parse_github_remote("https://github.com"), None);
+        assert_eq!(parse_github_remote("git@gitlab.com:o/r.git"), None);
+        assert_eq!(parse_github_remote(""), None);
+    }
+
+    #[test]
+    fn pr_view_args_carry_branch_selector_and_repo_value() {
+        let args = pr_view_args("feature/x", "o/r");
+        assert_eq!(
+            args,
+            vec![
+                "pr".to_string(),
+                "view".to_string(),
+                "feature/x".to_string(),
+                "--repo".to_string(),
+                "o/r".to_string(),
+                "--json".to_string(),
+                PR_FIELDS.to_string(),
+            ]
+        );
+        // gh requires the positional selector when --repo is explicit.
+        assert_eq!(args[2], "feature/x");
+        // --repo is never valueless, never empty.
+        let i = args.iter().position(|a| a == "--repo").unwrap();
+        assert!(!args[i + 1].is_empty());
+        assert!(args[i + 1].contains('/'));
     }
 }

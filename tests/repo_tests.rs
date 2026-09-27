@@ -413,3 +413,117 @@ fn repo_in_directory_with_spaces() {
         .replace('\\', "/")
         .contains("my work"));
 }
+
+// ------------------------------------------------------- repo pr repair (0.1.1)
+
+fn github_remote(dir: &std::path::Path) {
+    git(
+        dir,
+        &[
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/octocat/Hello-World.git",
+        ],
+    );
+}
+
+/// PATH where `git` resolves but `gh` must not (hermetic gh-absence proof).
+/// Mirrors the isolation pattern used by the search fallback tests.
+fn git_only_path() -> (tempfile::TempDir, PathBuf) {
+    let git = which::which("git").expect("git for fixtures");
+    #[cfg(unix)]
+    {
+        let dir = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink(&git, dir.path().join("git")).unwrap();
+        let path = dir.path().to_path_buf();
+        (dir, path)
+    }
+    #[cfg(windows)]
+    {
+        let dir = tempfile::tempdir().unwrap();
+        let path = git.parent().unwrap().to_path_buf();
+        (dir, path)
+    }
+}
+
+#[test]
+fn pr_without_any_remote_is_unavailable() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo_with_commit(dir.path());
+    let out = run_json(dir.path(), &["repo", "pr"]);
+    assert_eq!(out.code, 3);
+    assert_eq!(out.status_str(), "capability_unavailable");
+    assert!(out.json()["summary"]
+        .as_str()
+        .unwrap()
+        .contains("no GitHub remote"));
+}
+
+#[test]
+fn pr_with_non_github_remote_is_unavailable() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo_with_commit(dir.path());
+    git(
+        dir.path(),
+        &["remote", "add", "origin", "https://gitlab.com/o/r.git"],
+    );
+    let out = run_json(dir.path(), &["repo", "pr"]);
+    assert_eq!(out.code, 3);
+    assert_eq!(out.status_str(), "capability_unavailable");
+    assert!(out.json()["summary"]
+        .as_str()
+        .unwrap()
+        .contains("no GitHub remote"));
+}
+
+#[test]
+fn pr_with_malformed_github_remote_is_unavailable() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo_with_commit(dir.path());
+    // Parses as a remote, but carries no owner/repo identity.
+    git(
+        dir.path(),
+        &["remote", "add", "origin", "https://github.com/o/"],
+    );
+    let out = run_json(dir.path(), &["repo", "pr"]);
+    assert_eq!(out.code, 3);
+    assert_eq!(out.status_str(), "capability_unavailable");
+}
+
+#[test]
+fn pr_without_gh_is_capability_unavailable() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo_with_commit(dir.path());
+    github_remote(dir.path());
+    let (_guard, path) = git_only_path();
+    let out = run_json_env(
+        dir.path(),
+        &["repo", "pr"],
+        &[
+            ("PATH", Some(path.to_str().unwrap())),
+            ("GH_TOKEN", None),
+            ("GITHUB_TOKEN", None),
+        ],
+    );
+    assert_eq!(out.code, 3, "stderr: {}", out.stderr);
+    assert_eq!(out.status_str(), "capability_unavailable");
+}
+
+#[test]
+fn pr_on_detached_head_never_guesses_a_selector() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo_with_commit(dir.path());
+    github_remote(dir.path());
+    git_ok_cmd(dir.path(), &["checkout", "--detach"]);
+    let out = run_json(dir.path(), &["repo", "pr"]);
+    // Answered from local repository truth alone: no gh, no auth, no network.
+    assert_eq!(out.code, 4, "stderr: {}", out.stderr);
+    assert_eq!(out.status_str(), "no_results");
+    assert!(out.json()["summary"].as_str().unwrap().contains("detached"));
+}
+
+fn git_ok_cmd(dir: &std::path::Path, args: &[&str]) {
+    let (code, so, se) = git(dir, args);
+    assert_eq!(code, 0, "git {args:?} failed: {se}{so}");
+}
