@@ -282,3 +282,59 @@ fn timeout_flag_is_accepted() {
     let out = run_json(dir.path(), &["verify", "quick", "--timeout", "300"]);
     assert_eq!(out.code, 0);
 }
+
+#[test]
+fn ambiguity_teaches_the_config_shape() {
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "justfile", "check:\n    @echo ok\n");
+    write(
+        dir.path(),
+        "package.json",
+        "{\"scripts\":{\"test\":\"echo ok\"}}",
+    );
+
+    // discover: structured config example in data (agent-recoverable).
+    let out = run_json(dir.path(), &["verify", "discover"]);
+    assert_eq!(out.code, 2);
+    assert_eq!(out.status_str(), "ambiguous");
+    let data = out.data();
+    let ex = data["config_example"]
+        .as_str()
+        .expect("config_example in ambiguity data");
+    for needle in [
+        "[verify]",
+        "authority =",
+        "quick =",
+        "full =",
+        "timeout_seconds",
+    ] {
+        assert!(
+            ex.contains(needle),
+            "config example missing {needle:?}: {ex}"
+        );
+    }
+
+    // quick/full refusals carry the same recovery snippet as hints.
+    let out = run_json(dir.path(), &["verify", "quick"]);
+    assert_eq!(out.code, 2);
+    let v = out.json();
+    let reasons: Vec<String> = v["next_actions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|n| n["reason"].as_str().unwrap_or_default().to_string())
+        .collect();
+    assert!(
+        reasons
+            .iter()
+            .any(|r| r.contains("[verify]") && r.contains("authority =")),
+        "{reasons:?}"
+    );
+
+    // Human mode shows the example inline; piped output stays plain.
+    let human = run_human(dir.path(), &["verify", "discover"]);
+    assert_eq!(human.code, 2);
+    assert!(human.stdout.contains("[verify]"));
+    assert!(human.stdout.contains("authority ="));
+    assert_no_ansi(&human.stdout);
+}

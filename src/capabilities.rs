@@ -173,9 +173,8 @@ pub fn derive(reg: &ToolRegistry, facts: &EnvFacts) -> Vec<CapabilityView> {
     push("verify.cargo", vt, vb, vm, None);
 
     // Package-script verification: runners outside the recommended registry.
-    let runner = ["npm", "pnpm", "yarn", "bun"]
-        .iter()
-        .find(|p| crate::process::resolve_program(p).is_ok());
+    // Shares verify's canonical runner preference order (one source of truth).
+    let runner = crate::verify::first_runner_on_path();
     match runner {
         Some(r) => push(
             "verify.package",

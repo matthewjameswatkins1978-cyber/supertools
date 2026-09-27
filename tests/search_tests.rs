@@ -349,3 +349,77 @@ fn context_fallback_without_rg() {
         .as_array()
         .is_some_and(|b| !b.is_empty()));
 }
+
+// ------------------------------------------------- silent-regex-trap recovery
+
+fn next_commands(v: &serde_json::Value) -> Vec<String> {
+    v["next_actions"]
+        .as_array()
+        .unwrap_or(&Vec::new())
+        .iter()
+        .map(|n| n["command"].as_str().unwrap_or_default().to_string())
+        .collect()
+}
+
+#[test]
+fn zero_match_regex_query_teaches_fixed_retry() {
+    if !tool_available("rg") {
+        return; // the hint lives on the rg path; absence has its own refusal
+    }
+    let dir = repo_with_content();
+    // "a + b" exists literally in src/lib.rs; as a REGEX it matches nothing
+    // (a, one-or-more spaces, b) — the classic silent trap.
+    let out = run_json(dir.path(), &["search", "text", "a + b"]);
+    assert_eq!(out.code, 4);
+    assert_eq!(out.status_str(), "no_results");
+    let v = out.json();
+    assert_eq!(v["data"]["mode"], "regex");
+    let cmds = next_commands(&v);
+    assert!(
+        cmds.iter().any(|c| c.contains("--fixed")),
+        "zero-match regex query must teach --fixed: {cmds:?}"
+    );
+    // The literal reading genuinely matches — the hint is truthful, not noise.
+    let fixed = run_json(dir.path(), &["search", "text", "a + b", "--fixed"]);
+    assert_eq!(fixed.code, 0);
+    assert!(fixed.data()["match_count"].as_u64().unwrap() >= 1);
+}
+
+#[test]
+fn successful_regex_and_plain_queries_gain_no_fixed_hint() {
+    if !tool_available("rg") {
+        return;
+    }
+    let dir = repo_with_content();
+    // Non-zero regex results: semantics unchanged, no hint.
+    let hit = run_json(dir.path(), &["search", "text", "pub fn \\w+"]);
+    assert_eq!(hit.code, 0);
+    assert!(next_commands(&hit.json()).is_empty());
+    // Zero matches WITHOUT metacharacters: a real "nothing found", no hint.
+    let plain = run_json(dir.path(), &["search", "text", "zzz_no_such_token"]);
+    assert_eq!(plain.code, 4);
+    assert!(next_commands(&plain.json()).is_empty());
+    // Explicit --fixed zero matches: no hint (already literal).
+    let fixed = run_json(
+        dir.path(),
+        &["search", "text", "zzz_no_such_token", "--fixed"],
+    );
+    assert_eq!(fixed.code, 4);
+    assert!(next_commands(&fixed.json()).is_empty());
+}
+
+#[test]
+fn zero_match_regex_context_query_teaches_fixed_retry() {
+    if !tool_available("rg") {
+        return;
+    }
+    let dir = repo_with_content();
+    let out = run_json(dir.path(), &["search", "context", "a + b"]);
+    assert_eq!(out.code, 4);
+    let cmds = next_commands(&out.json());
+    assert!(
+        cmds.iter()
+            .any(|c| c.contains("--fixed") && c.contains("context")),
+        "{cmds:?}"
+    );
+}

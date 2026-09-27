@@ -479,6 +479,16 @@ fn package_scripts(root: &Path) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// Canonical package-runner preference order (shared with `capabilities`).
+pub const PACKAGE_RUNNERS: [&str; 4] = ["npm", "pnpm", "yarn", "bun"];
+
+/// First package runner resolvable on PATH, in canonical preference order.
+pub fn first_runner_on_path() -> Option<&'static str> {
+    PACKAGE_RUNNERS
+        .into_iter()
+        .find(|p| process::resolve_program(p).is_ok())
+}
+
 fn pick_package_runner(root: &Path, notes: &mut Vec<String>) -> Option<String> {
     let preferred = [
         ("pnpm-lock.yaml", "pnpm"),
@@ -495,13 +505,23 @@ fn pick_package_runner(root: &Path, notes: &mut Vec<String>) -> Option<String> {
             notes.push(format!("{lock} present but {runner} is not installed"));
         }
     }
-    for runner in ["npm", "pnpm", "yarn", "bun"] {
-        if process::resolve_program(runner).is_ok() {
-            return Some(runner.to_string());
-        }
+    if let Some(r) = first_runner_on_path() {
+        return Some(r.to_string());
     }
     notes.push("no package runner (npm/pnpm/yarn/bun) found on PATH".into());
     None
+}
+
+/// Canonical `.supertools.toml` [verify] example — compact, real schema only,
+/// so an unfamiliar agent can recover from ambiguity without the README.
+pub fn config_example(authority: &str) -> String {
+    format!(
+        "[verify]\n\
+         authority = \"{authority}\"   # one of: mise, just, package, cargo\n\
+         quick = \"check\"           # a declared task name for the cheap check\n\
+         full = \"test\"             # a declared task name for the full suite\n\
+         timeout_seconds = 900     # optional; seconds before the task is killed\n"
+    )
 }
 
 // ---------------------------------------------------------------- commands
@@ -540,7 +560,7 @@ fn json_discovery(d: &Discovery) -> serde_json::Value {
 pub fn discover_cmd() -> CmdResult {
     let operation = "verify.discover";
     let d = discover(operation)?;
-    let data = json_discovery(&d);
+    let mut data = json_discovery(&d);
     let config_evidence = d.config_path.as_ref().map(|p| {
         Evidence::file(
             &p.to_string_lossy(),
@@ -550,6 +570,10 @@ pub fn discover_cmd() -> CmdResult {
 
     if !d.ambiguity.is_empty() {
         let list = d.ambiguity.join(", ");
+        let example = config_example(d.ambiguity.first().map(|s| s.as_str()).unwrap_or("just"));
+        if let Some(obj) = data.as_object_mut() {
+            obj.insert("config_example".to_string(), json!(example));
+        }
         let mut b = Builder::new(
             operation,
             Status::Ambiguous,
@@ -563,11 +587,9 @@ pub fn discover_cmd() -> CmdResult {
         );
         b = b.line(format!("AMBIGUOUS: {list}"));
         b = b.line("Declare the canonical authority in .supertools.toml:");
-        b = b.line("  [verify]");
-        b = b.line(format!(
-            "  authority = \"{}\"   # choose one",
-            d.ambiguity.first().cloned().unwrap_or_default()
-        ));
+        for l in example.lines() {
+            b = b.line(format!("  {l}"));
+        }
         return Ok(b);
     }
 
@@ -741,6 +763,7 @@ fn run_task(
         .timeout(timeout)
         .max_stdout(MAX_STDOUT_CAP)
         .max_stderr(MAX_STDOUT_CAP);
+    crate::present::verify_progress(&command.join(" "), timeout.as_secs());
     let outcome = process::run(&req).map_err(|e| {
         Failure::failed(
             operation,
@@ -943,12 +966,14 @@ fn ensure_unambiguous(d: &Discovery, operation: &str) -> Result<(), Failure> {
         return Ok(());
     }
     let list = d.ambiguity.join(", ");
+    let example = config_example(d.ambiguity.first().map(|s| s.as_str()).unwrap_or("just"));
     Err(Failure::new(
         operation,
         Status::Ambiguous,
         format!("ambiguous verification authorities ({list}); refusing to guess (fail closed)"),
     )
-    .hint("declare the canonical authority in .supertools.toml under [verify]")
+    .hint("declare the canonical authority in .supertools.toml under [verify]:")
+    .hint(example)
     .hint("supertools verify discover  # full explanation"))
 }
 

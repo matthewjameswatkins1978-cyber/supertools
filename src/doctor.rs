@@ -178,12 +178,29 @@ pub fn doctor_cmd() -> CmdResult {
         _ => Status::CapabilityUnavailable,
     };
 
+    // Capability summary counts, derived from the same capability authority
+    // (`capabilities::derive`) already consulted above — no second probe.
+    let cap_ready = caps.iter().filter(|c| c.status == CapStatus::Ready).count();
+    let cap_degraded = caps
+        .iter()
+        .filter(|c| c.status == CapStatus::Degraded)
+        .count();
+    let cap_unavailable = caps
+        .iter()
+        .filter(|c| c.status == CapStatus::Unavailable)
+        .count();
+
     let mut b = Builder::new(operation, status, format!("overall: {overall}"))
         .data(json!({
             "overall": overall,
             "supertools_version": env!("CARGO_PKG_VERSION"),
             "platform": reg.platform,
             "checks": checks.iter().map(|c| json!({"id": c.id, "status": c.status, "label": c.label})).collect::<Vec<_>>(),
+            "capability_summary": {
+                "ready": cap_ready,
+                "degraded": cap_degraded,
+                "unavailable": cap_unavailable,
+            },
             "optional_improvements": gaps,
             "repo_context": repo_context,
         }));
@@ -192,6 +209,9 @@ pub fn doctor_cmd() -> CmdResult {
         .line("SUPERTOOLS DOCTOR")
         .line("")
         .line(format!("Overall: {}", overall.to_uppercase()))
+        .line(format!(
+            "Capabilities: {cap_ready} ready · {cap_degraded} degraded · {cap_unavailable} unavailable"
+        ))
         .line("");
     for c in &checks {
         let mark = match c.status {

@@ -301,6 +301,20 @@ fn rg_json_search(
             "results are bounded (limit {limit}); more matches exist — narrow the query or raise --limit"
         ));
     }
+    // Silent-regex-trap recovery: a metacharacter-bearing query that matched
+    // nothing in regex mode may have been intended literally. Surface the
+    // bounded hint; never rerun or reinterpret the query automatically.
+    if total_matches == 0
+        && !opts.fixed
+        && regex_needs_rg(query)
+        && matches!(operation, "search.text" | "search.context")
+    {
+        let sub = if context > 0 { "context" } else { "text" };
+        b = b.next(
+            format!("supertools search {sub} {query:?} --fixed"),
+            "zero matches in regex mode and the query contains regex metacharacters; if you meant it literally, retry with --fixed",
+        );
+    }
     Ok(b)
 }
 
@@ -312,6 +326,54 @@ fn norm_search_path(p: &str) -> String {
         Some(rest) => rest.to_string(),
         None => unified,
     }
+}
+
+/// Strip Windows verbatim (`\\?\`) prefixes and trailing slashes from a
+/// unified-slash path string.
+fn strip_verbatim(unified: &str) -> String {
+    let t = unified.strip_prefix("//?/").unwrap_or(unified);
+    t.trim_end_matches('/').to_string()
+}
+
+/// Current working directory as a unified-slash string — the relativisation
+/// root that rg/fd output already follows.
+fn cwd_prefix_unified() -> Option<String> {
+    let cwd = std::env::current_dir().ok()?;
+    Some(strip_verbatim(&cwd.to_string_lossy().replace('\\', "/")))
+}
+
+/// Does `unified` start with `root` + "/" ? ASCII case-insensitive on Windows
+/// (byte-level, so the prefix length stays valid for slicing the original).
+fn path_prefix_matches(unified: &str, root: &str) -> bool {
+    let (u, r) = (unified.as_bytes(), root.as_bytes());
+    if u.len() <= r.len() || u[r.len()] != b'/' {
+        return false;
+    }
+    #[cfg(windows)]
+    {
+        u[..r.len()]
+            .iter()
+            .zip(r)
+            .all(|(a, b)| a.eq_ignore_ascii_case(b))
+    }
+    #[cfg(not(windows))]
+    {
+        u.starts_with(root)
+    }
+}
+
+/// Normalise an absolute backend path to the same repository(cwd)-relative
+/// convention used by rg/fd results, so search.text, search.context and
+/// search.structural hits can be correlated without manual reconciliation.
+/// Paths outside the cwd stay absolute — truthful, never invented relatives.
+fn relativise_backend_path(p: &str, cwd_prefix: Option<&str>) -> String {
+    let unified = strip_verbatim(&p.replace('\\', "/"));
+    if let Some(root) = cwd_prefix {
+        if path_prefix_matches(&unified, root) {
+            return unified[root.len() + 1..].to_string();
+        }
+    }
+    norm_search_path(&unified)
 }
 
 fn parses_as_json_array(s: &str) -> bool {
@@ -758,6 +820,9 @@ pub fn structural(opts: CommonOpts) -> CmdResult {
     let arr = parsed.as_array().cloned().unwrap_or_default();
     let total = arr.len();
     let truncated = total > opts.limit || outcome.stdout_truncated;
+    // ast-grep reports absolute paths; relativise to the cwd so results
+    // correlate with search.text/search.context paths.
+    let cwd = cwd_prefix_unified();
     let kept: Vec<serde_json::Value> = arr
         .into_iter()
         .take(opts.limit)
@@ -766,7 +831,7 @@ pub fn structural(opts: CommonOpts) -> CmdResult {
                 "path": m
                     .get("file")
                     .and_then(|f| f.as_str())
-                    .map(norm_search_path)
+                    .map(|f| relativise_backend_path(f, cwd.as_deref()))
                     .unwrap_or_default(),
                 "start": m.get("range").and_then(|r| r.get("start")).cloned().unwrap_or(json!(null)),
                 "end": m.get("range").and_then(|r| r.get("end")).cloned().unwrap_or(json!(null)),
@@ -985,4 +1050,76 @@ pub fn files(opts: CommonOpts) -> CmdResult {
         b = b.warning(format!("results bounded at limit {limit}"));
     }
     Ok(b)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn no_dot_slash(s: &str) {
+        assert!(!s.contains("./"), "unexpected ./ in {s:?}");
+        assert!(!s.contains(".\\"), "unexpected .\\ in {s:?}");
+    }
+
+    #[test]
+    fn windows_style_backend_path_becomes_relative() {
+        let got = relativise_backend_path("D:\\proj\\src\\main.rs", Some("D:/proj"));
+        assert_eq!(got, "src/main.rs");
+        no_dot_slash(&got);
+    }
+
+    #[test]
+    fn unix_style_backend_path_becomes_relative() {
+        let got = relativise_backend_path("/home/u/proj/src/main.rs", Some("/home/u/proj"));
+        assert_eq!(got, "src/main.rs");
+        no_dot_slash(&got);
+    }
+
+    #[test]
+    fn already_relative_dot_prefixed_path_is_cleaned() {
+        let got = relativise_backend_path("./src/main.rs", Some("/home/u/proj"));
+        assert_eq!(got, "src/main.rs");
+        no_dot_slash(&got);
+        let got = relativise_backend_path(".\\src\\main.rs", Some("D:/proj"));
+        assert_eq!(got, "src/main.rs");
+        no_dot_slash(&got);
+    }
+
+    #[test]
+    fn path_outside_root_stays_absolute_and_truthful() {
+        let got = relativise_backend_path("/elsewhere/x.rs", Some("/home/u/proj"));
+        assert_eq!(got, "/elsewhere/x.rs");
+        let got = relativise_backend_path("D:\\other\\x.rs", Some("D:/proj"));
+        assert_eq!(got, "D:/other/x.rs");
+        no_dot_slash(&got);
+    }
+
+    #[test]
+    fn verbatim_windows_prefix_is_stripped() {
+        let got = relativise_backend_path("\\\\?\\D:\\proj\\src\\x.rs", Some("D:/proj"));
+        assert_eq!(got, "src/x.rs");
+    }
+
+    #[test]
+    fn root_match_requires_separator_not_partial_name() {
+        // "D:/project" must not be treated as inside "D:/proj".
+        let got = relativise_backend_path("D:/project/src/x.rs", Some("D:/proj"));
+        assert_eq!(got, "D:/project/src/x.rs");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_prefix_match_is_case_insensitive() {
+        let got = relativise_backend_path("d:/PROJ/src/x.rs", Some("D:/proj"));
+        assert_eq!(got, "src/x.rs");
+    }
+
+    #[test]
+    fn zero_match_regex_query_gains_fixed_hint() {
+        // The hint predicate: regex mode + metacharacters. Fixed mode and
+        // plain literal queries must not gain the hint.
+        assert!(regex_needs_rg("map[string]"));
+        assert!(regex_needs_rg("foo.*bar"));
+        assert!(!regex_needs_rg("plain_identifier"));
+    }
 }

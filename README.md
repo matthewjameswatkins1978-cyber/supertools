@@ -100,6 +100,14 @@ capability_unavailable | ambiguous | refused`. Exit codes: `0` success ·
 invalid/refused/ambiguous · `3` capability unavailable · `4` completed but
 no matches / nothing applicable. (`no_results` has `ok: true`.)
 
+## Human presentation
+
+When — and only when — stdout is an attached terminal in human mode, output
+is dressed by [Sartorial](https://github.com/matthewjameswatkins1978-cyber/Sartorial)
+(pinned revision, House preset). Sartorial never becomes semantic authority:
+piped/redirected output stays plain and deterministic, `--json` never passes
+through it, and exit codes, warnings and next actions are unchanged.
+
 ## Doctor
 
 `supertools doctor` answers "is anything actually wrong?" with one of
@@ -186,6 +194,11 @@ output_bytes = 8192  # diagnostic tail cap for verify runs
 - `repo pr/ci` need `gh` + GitHub remote + authentication.
 - Package-script verification needs an npm/pnpm/yarn/bun runner for
   execution (discovery works regardless).
+- `repo show <sha|file>` and bounded blame are deliberately NOT in v0.1 —
+  parked as candidates for v0.2.
+- On Windows, running `supertools verify full` from a candidate binary that
+  lives inside `target/` of the same workspace can fail while cargo replaces
+  the locked exe; run the candidate from a copy outside `target/`.
 
 ## Future: MCP
 

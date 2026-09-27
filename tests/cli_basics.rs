@@ -283,3 +283,29 @@ fn json_stdout_is_pure_json() {
     assert!(trimmed.starts_with('{') && trimmed.ends_with('}'));
     assert_no_ansi(&out.stdout);
 }
+
+#[test]
+fn root_help_maps_intent_to_commands() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = run_human(dir.path(), &["--help"]);
+    assert_eq!(out.code, 0);
+    assert_no_ansi(&out.stdout);
+    assert!(out.stdout.contains("INTENT MAP"));
+    for needle in [
+        "supertools search text",
+        "supertools search files",
+        "supertools repo state",
+        "supertools repo changed",
+        "supertools verify discover",
+        "supertools tools",
+        "supertools describe <operation>",
+    ] {
+        assert!(
+            out.stdout.contains(needle),
+            "root help intent map missing {needle:?}"
+        );
+    }
+    // Exit-code contract still discoverable from the same surface.
+    assert!(out.stdout.contains("EXIT CODES"));
+    assert!(out.stdout.contains("no matches/no applicable result"));
+}

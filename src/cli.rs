@@ -14,7 +14,15 @@ use clap::{Parser, Subcommand};
                   It wraps existing tools (git, ripgrep, fd, gh, cargo, mise, just, ast-grep) with bounded\n\
                   operations, structured evidence, safe defaults and runtime self-teaching.\n\n\
                   Start here: supertools capabilities | supertools describe | supertools teach <domain> | supertools doctor",
-    after_help = "EXIT CODES:\n  \
+    after_help = "INTENT MAP:\n  \
+                  Find text in files        -> supertools search text\n  \
+                  Find files by name        -> supertools search files\n  \
+                  Inspect repository state  -> supertools repo state\n  \
+                  See what changed          -> supertools repo changed\n  \
+                  Discover project checks   -> supertools verify discover\n  \
+                  Check tool availability   -> supertools tools\n  \
+                  Understand an operation   -> supertools describe <operation>\n\n\
+                  EXIT CODES:\n  \
                   0 success · 1 execution/verification failure (incl. timeout) · 2 invalid/refused/ambiguous ·\n  \
                   3 capability unavailable · 4 completed, no matches/no applicable result\n\n\
                   All commands accept --json for the canonical machine-readable envelope."

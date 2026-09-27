@@ -15,6 +15,9 @@ serde_json = "1"
 thiserror = "2"
 which = "7"
 toml = "0.8"
+# Sartorial, pinned to the merged v0.2 commit (presentation only; no default
+# features — Supertools owns its CLI surface and needs only presentation types).
+sartorial = { git = "https://github.com/matthewjameswatkins1978-cyber/Sartorial", rev = "2cfbcd16e7c1c90b27310009fddd49101b904331", default-features = false }
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.52"

@@ -63,6 +63,19 @@ const LIMIT: InputSpec = InputSpec {
     required: false,
     description: "maximum results returned (bounded output; truncation is reported)",
 };
+const LIMIT_MATCHES: InputSpec = InputSpec {
+    name: "--limit",
+    kind: InputKind::Number,
+    required: false,
+    description: "maximum number of MATCHES returned (bounded output; truncation is reported)",
+};
+const LIMIT_BLOCKS: InputSpec = InputSpec {
+    name: "--limit",
+    kind: InputKind::Number,
+    required: false,
+    description:
+        "maximum number of CONTEXT BLOCKS (not individual matches; truncation is reported)",
+};
 const PATHOPT: InputSpec = InputSpec {
     name: "--path",
     kind: InputKind::Path,
@@ -89,7 +102,7 @@ pub static OPERATIONS: &[Operation] = &[
         read_only: true,
         destructive: false,
         idempotent: true,
-        inputs: &[Q, LIMIT, PATHOPT],
+        inputs: &[Q, LIMIT_MATCHES, PATHOPT],
         output: "matches[] with path, line, column, matched text; explicit truncation state",
         next: &["search.context", "search.files"],
         fallback: Some("without rg, a bounded internal fixed-substring scan runs instead (regex requires rg)"),
@@ -111,7 +124,7 @@ pub static OPERATIONS: &[Operation] = &[
         inputs: &[Q, LIMIT, PATHOPT],
         output: "paths[] respecting ignore rules; backend used; truncation state",
         next: &["search.text"],
-        fallback: Some("preferred backend fd; falls back to a bounded git ls-files scan"),
+        fallback: Some("preferred backend fd (regex by default); falls back to a bounded git ls-files scan with materially different semantics: case-insensitive SUBSTRING match over git-listed files only"),
     },
     Operation {
         id: "search.context",
@@ -126,7 +139,7 @@ pub static OPERATIONS: &[Operation] = &[
         read_only: true,
         destructive: false,
         idempotent: true,
-        inputs: &[Q, LIMIT, PATHOPT],
+        inputs: &[Q, LIMIT_BLOCKS, PATHOPT],
         output: "blocks[] of {path, anchor line, window lines with match markers}",
         next: &["search.text", "search.structural"],
         fallback: Some("without rg, bounded internal fixed-substring scan with context"),
@@ -303,7 +316,7 @@ pub static OPERATIONS: &[Operation] = &[
         read_only: false,
         destructive: false,
         idempotent: true,
-        inputs: &[InputSpec { name: "--timeout", kind: InputKind::Number, required: false, description: "kill the verification after N seconds" }],
+        inputs: &[InputSpec { name: "--timeout", kind: InputKind::Number, required: false, description: "kill the verification after N seconds (default 900; 1800 for verify full)" }],
         output: "authority, task, command vector, duration, exit state, bounded diagnostics tail",
         next: &["verify.full"],
         fallback: None,
@@ -319,7 +332,7 @@ pub static OPERATIONS: &[Operation] = &[
         read_only: false,
         destructive: false,
         idempotent: true,
-        inputs: &[InputSpec { name: "--timeout", kind: InputKind::Number, required: false, description: "kill the verification after N seconds" }],
+        inputs: &[InputSpec { name: "--timeout", kind: InputKind::Number, required: false, description: "kill the verification after N seconds (default 900; 1800 for verify full)" }],
         output: "authority, task, command vector, duration, exit state, bounded diagnostics tail",
         next: &["repo.changed"],
         fallback: None,
@@ -335,7 +348,10 @@ pub static OPERATIONS: &[Operation] = &[
         read_only: false,
         destructive: false,
         idempotent: false,
-        inputs: &[InputSpec { name: "name", kind: InputKind::Name, required: true, description: "must resolve to a discovered declared task name" }],
+        inputs: &[
+            InputSpec { name: "name", kind: InputKind::Name, required: true, description: "must resolve to a discovered declared task name" },
+            InputSpec { name: "--timeout", kind: InputKind::Number, required: false, description: "kill the verification after N seconds (default 900; 1800 for verify full)" },
+        ],
         output: "same evidence as verify.quick",
         next: &["verify.discover"],
         fallback: None,
@@ -590,6 +606,34 @@ mod tests {
             assert!(o.read_only, "{} must be read-only in v0.1", o.id);
             assert!(!o.destructive, "{} must not be destructive", o.id);
         }
+    }
+
+    #[test]
+    fn timeout_defaults_in_describe_match_verify_constants() {
+        let quick = crate::verify::DEFAULT_QUICK_TIMEOUT.to_string();
+        let full = crate::verify::DEFAULT_FULL_TIMEOUT.to_string();
+        for id in ["verify.quick", "verify.full", "verify.task"] {
+            let o = find_operation(id).expect(id);
+            let spec = o
+                .inputs
+                .iter()
+                .find(|i| i.name == "--timeout")
+                .unwrap_or_else(|| panic!("{id} must document --timeout"));
+            assert!(
+                spec.description.contains(&quick) && spec.description.contains(&full),
+                "{id} --timeout description must state the real defaults ({quick}s/{full}s)"
+            );
+        }
+    }
+
+    #[test]
+    fn limit_semantics_are_distinguished() {
+        let text = find_operation("search.text").unwrap();
+        let ctx = find_operation("search.context").unwrap();
+        let tl = text.inputs.iter().find(|i| i.name == "--limit").unwrap();
+        let cl = ctx.inputs.iter().find(|i| i.name == "--limit").unwrap();
+        assert!(tl.description.contains("MATCHES"));
+        assert!(cl.description.contains("CONTEXT BLOCKS"));
     }
 
     #[test]

@@ -12,6 +12,7 @@ mod cli;
 mod describe;
 mod doctor;
 mod output;
+mod present;
 mod process;
 mod registry;
 mod repo;
@@ -142,13 +143,18 @@ fn render(b: output::Builder, json: bool) -> i32 {
             Err(e) => eprintln!("supertools: could not serialise envelope: {e}"),
         }
     } else {
-        if b.human.is_empty() {
-            println!("{}", b.summary);
-        } else {
-            for l in &b.human {
-                println!("{l}");
+        // Sartorial dresses the human body for attached terminals only;
+        // piped output keeps the deterministic plain lines byte-for-byte.
+        if !present::render_builder(&b) {
+            if b.human.is_empty() {
+                println!("{}", b.summary);
+            } else {
+                for l in &b.human {
+                    println!("{l}");
+                }
             }
         }
+        // Semantic facts stay on stderr in human mode, styled or not.
         for w in &b.warnings {
             eprintln!("warning: {w}");
         }
@@ -170,7 +176,7 @@ fn render_failure(f: output::Failure, json: bool) -> i32 {
             Ok(s) => println!("{s}"),
             Err(e) => eprintln!("supertools: could not serialise envelope: {e}"),
         }
-    } else {
+    } else if !present::render_failure(&f) {
         eprintln!("supertools error [{}]: {}", f.status.as_str(), f.message);
         for h in &f.hints {
             if h.is_empty() {
@@ -184,6 +190,7 @@ fn render_failure(f: output::Failure, json: bool) -> i32 {
 
 fn main() {
     let cli = Cli::parse();
+    present::set_json_mode(cli.json);
     let code = match dispatch(cli.cmd) {
         Ok(b) => render(b, cli.json),
         Err(f) => render_failure(f, cli.json),
