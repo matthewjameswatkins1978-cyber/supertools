@@ -120,18 +120,22 @@ impl ToolId {
     }
 
     /// Substring that must appear in `--version` output to confirm identity.
-    pub fn identity_token(self) -> &'static str {
+    /// `None` means the upstream version format omits the program name, so
+    /// identity is "exits 0 with non-empty version output" (documented per
+    /// tool below).
+    pub fn identity_token(self) -> Option<&'static str> {
         match self {
-            ToolId::Git => "git",
-            ToolId::Cargo => "cargo",
-            ToolId::Rustc => "rustc",
-            ToolId::Rg => "ripgrep",
-            ToolId::Fd => "fd",
-            ToolId::Gh => "gh",
-            ToolId::Mise => "mise",
-            ToolId::Just => "just",
-            ToolId::AstGrep => "ast-grep",
-            ToolId::Threadmoth => "threadmoth",
+            ToolId::Git => Some("git"),
+            ToolId::Cargo => Some("cargo"),
+            ToolId::Rustc => Some("rustc"),
+            ToolId::Rg => Some("ripgrep"),
+            ToolId::Fd => Some("fd"),
+            ToolId::Gh => Some("gh"),
+            // mise prints e.g. "2026.9.5 windows-x64 (2026-09-10)": no name.
+            ToolId::Mise => None,
+            ToolId::Just => Some("just"),
+            ToolId::AstGrep => Some("ast-grep"),
+            ToolId::Threadmoth => Some("threadmoth"),
         }
     }
 
@@ -579,9 +583,12 @@ pub fn probe_version(exe: &Path, id: ToolId) -> VersionProbe {
                 .unwrap_or("")
                 .to_string();
             let identity_ok = out.success()
-                && first_line
-                    .to_ascii_lowercase()
-                    .contains(id.identity_token());
+                && match id.identity_token() {
+                    Some(token) => first_line.to_ascii_lowercase().contains(token),
+                    // Upstream omits its own name (e.g. mise): any version
+                    // line from a trusted location counts.
+                    None => !first_line.is_empty(),
+                };
             VersionProbe {
                 version: if first_line.is_empty() {
                     None
@@ -876,5 +883,20 @@ mod tests {
         assert!(!DiscoverySource::AppDataScan.trusted());
         assert!(DiscoverySource::ProcessPath.trusted());
         assert!(DiscoverySource::CargoBin.trusted());
+    }
+
+    #[test]
+    fn identity_tokens_cover_every_tool() {
+        for id in ALL_TOOLS {
+            // mise upstream omits its own name from --version output.
+            if id == ToolId::Mise {
+                assert_eq!(id.identity_token(), None);
+            } else {
+                assert!(
+                    id.identity_token().is_some_and(|t| !t.is_empty()),
+                    "{id:?} needs an identity token"
+                );
+            }
+        }
     }
 }

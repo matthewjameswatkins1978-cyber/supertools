@@ -19,14 +19,26 @@ fn short_version(rec: &ToolRecord) -> String {
     match &rec.version {
         None => "-".to_string(),
         Some(v) => {
-            // Prefer a bare numeric token for compact tables.
-            let token = v
-                .split(|c: char| !c.is_ascii_digit() && c != '.')
-                .find(|t| t.contains('.') && t.chars().next().is_some_and(|c| c.is_ascii_digit()));
-            match token {
-                Some(t) => crate::process::head(t, 24).0,
-                None => crate::process::head(v, 24).0,
+            // First whitespace-separated token starting with a digit,
+            // reduced to its leading numeric dotted prefix.
+            let mut out = String::new();
+            for tok in v.split_whitespace() {
+                if tok.starts_with(|c: char| c.is_ascii_digit()) {
+                    let num: String = tok
+                        .chars()
+                        .take_while(|c| c.is_ascii_digit() || *c == '.')
+                        .collect();
+                    let num = num.trim_end_matches('.');
+                    if !num.is_empty() && num.contains('.') {
+                        out = num.to_string();
+                        break;
+                    }
+                }
             }
+            if out.is_empty() {
+                out = crate::process::head(v, 24).0;
+            }
+            out
         }
     }
 }
