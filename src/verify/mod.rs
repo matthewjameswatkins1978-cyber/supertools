@@ -553,7 +553,7 @@ pub fn discover_cmd() -> CmdResult {
         let mut b = Builder::new(
             operation,
             Status::Ambiguous,
-            format!("ambiguous verification authorities: {list} (fail closed)"),
+            format!("ambiguous verification authorities: {list} (fail closed) — declare the canonical authority in .supertools.toml"),
         )
         .data(data)
         .warning("Supertools refuses to guess which authority is canonical")
