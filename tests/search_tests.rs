@@ -330,8 +330,7 @@ fn search_without_rg_or_git_reports_unavailable() {
 #[test]
 fn context_fallback_without_rg() {
     let dir = repo_with_content();
-    let git_path = which::which("git").expect("git for fixtures");
-    let git_dir = git_path.parent().unwrap().to_path_buf();
+    let (_iso, iso_dir) = isolated_git_dir();
     let out = run_json_env(
         dir.path(),
         &[
@@ -342,7 +341,7 @@ fn context_fallback_without_rg() {
             "--context",
             "1",
         ],
-        &[("PATH", Some(git_dir.to_str().unwrap()))],
+        &[("PATH", Some(iso_dir.to_str().unwrap()))],
     );
     assert_eq!(out.code, 0, "stderr: {}", out.stderr);
     assert_eq!(out.data()["backend"], "internal-fallback");
