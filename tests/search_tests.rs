@@ -5,6 +5,28 @@ mod common;
 
 use common::*;
 
+/// A PATH directory where `git` resolves but `rg` must not, for fallback
+/// tests. Unix distros ship git+rg side by side, so an isolated dir with a
+/// git symlink is built there; on Windows git's own directory suffices
+/// (rg ships separately via the cargo bin).
+/// Returns (guard dir to keep alive, path to put on PATH).
+fn isolated_git_dir() -> (tempfile::TempDir, std::path::PathBuf) {
+    let git = which::which("git").expect("git for fixtures");
+    #[cfg(unix)]
+    {
+        let dir = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink(&git, dir.path().join("git")).unwrap();
+        let path = dir.path().to_path_buf();
+        (dir, path)
+    }
+    #[cfg(windows)]
+    {
+        let dir = tempfile::tempdir().unwrap();
+        let path = git.parent().unwrap().to_path_buf();
+        (dir, path)
+    }
+}
+
 fn repo_with_content() -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
     init_repo_with_commit(dir.path());
@@ -261,17 +283,16 @@ fn structural_uses_ast_grep_or_reports_unavailable() {
 #[test]
 fn missing_rg_falls_back_for_fixed_and_refuses_regex() {
     let dir = repo_with_content();
-    // Simulate rg absence with an empty PATH (git remains unavailable too,
-    // but the fallback only needs git for file listing; keep git reachable
-    // by pointing PATH at git's directory only).
-    let git_path = which::which("git").expect("git for fixtures");
-    let git_dir = git_path.parent().unwrap().to_path_buf();
+    // Simulate rg absence while keeping git reachable. Unix distros often
+    // ship git and rg side by side (/usr/bin), so PATH cannot simply be
+    // "git's directory" there — isolate git behind a symlink instead.
+    let (_iso, iso_dir) = isolated_git_dir();
 
     // fixed-substring fallback works with git only
     let out = run_json_env(
         dir.path(),
         &["search", "text", "Permission", "--fixed"],
-        &[("PATH", Some(git_dir.to_str().unwrap()))],
+        &[("PATH", Some(iso_dir.to_str().unwrap()))],
     );
     assert_eq!(out.code, 0, "stderr: {}", out.stderr);
     let d = out.data();
@@ -287,7 +308,7 @@ fn missing_rg_falls_back_for_fixed_and_refuses_regex() {
     let out = run_json_env(
         dir.path(),
         &["search", "text", "Perm.*ion"],
-        &[("PATH", Some(git_dir.to_str().unwrap()))],
+        &[("PATH", Some(iso_dir.to_str().unwrap()))],
     );
     assert_eq!(out.code, 3);
     assert_eq!(out.status_str(), "capability_unavailable");
