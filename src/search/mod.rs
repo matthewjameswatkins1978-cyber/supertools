@@ -358,7 +358,7 @@ fn path_prefix_matches(unified: &str, root: &str) -> bool {
     }
     #[cfg(not(windows))]
     {
-        u.starts_with(root)
+        unified.starts_with(root)
     }
 }
 
